@@ -14,4 +14,4 @@ At that point, running the script in Adventure Land *should* cause a bunch of lo
 
 If you want to see something simple and easy to follow, to understand how the Rust itself works here, look at [main.rs.default_code](src/main.rs.default_code), which is a Rust version of exactly the same code that your character normally starts with by default.  Except without the `attack_mode` variable, because why?
 
-One important note: because of the system used to make sure that commands are not missed, if you stop either side, you must stop both and restart; see [README-other-languages-howto](README-other-languages-howto.md) for why if you're interested.
+One important note: because of the system used to make sure that commands are not missed, if you stop either side, you must stop both and restart; see [porting-to-other-languages/](porting-to-other-languages/README.md) for why if you're interested.
