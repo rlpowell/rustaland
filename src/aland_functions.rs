@@ -892,6 +892,13 @@ pub fn get_nearest_hostile(args: Value) -> Result<Value, Box<dyn std::error::Err
 }
 
 #[allow(dead_code)]
+pub fn get_nearby_hostiles(args: Value) -> Result<Value, Box<dyn std::error::Error>> {
+    let args_string = args.to_string();
+
+    handle_flow(format!("parent.get_nearby_hostiles({args_string});"))
+}
+
+#[allow(dead_code)]
 pub fn get_nearest_npc() -> Result<Value, Box<dyn std::error::Error>> {
     #[allow(clippy::useless_format)]
     handle_flow(format!("get_nearest_npc();"))
@@ -1440,8 +1447,13 @@ pub fn disconnect() -> Result<Value, Box<dyn std::error::Error>> {
 
 #[allow(dead_code)]
 pub fn smart_move(destination: Value, on_done: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let destination_string = destination.to_string();
+    // If we just send like `parent.entities["$Ernis"]` we don't want to process that further
+    let destination_string = if destination.is_string() {
+        destination.as_str().unwrap().to_owned()
+    } else {
+        destination.to_string()
+    };
+
     let on_done_string = on_done.to_string();
 
     handle_flow(format!(
@@ -1538,4 +1550,13 @@ pub fn performance_trick() -> Result<Value, Box<dyn std::error::Error>> {
 pub fn code_draw() -> Result<Value, Box<dyn std::error::Error>> {
     #[allow(clippy::useless_format)]
     handle_flow(format!("code_draw();"))
+}
+
+#[allow(dead_code)]
+pub fn simple_distance(a: &Value, b: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!(
+        "simple_distance({}, {});",
+        deref_entity(a),
+        deref_entity(b)
+    ))
 }

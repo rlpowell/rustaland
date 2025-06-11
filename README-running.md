@@ -13,5 +13,3 @@ SECURITY NOTE: Whatever's at the other end of `URL` in your version of the Adven
 At that point, running the script in Adventure Land *should* cause a bunch of logs of what the script is doing to show up in both your server window and in Adventure Land itself.  If not, most likely it can't connect.  You'll also get `TypeError: Failed to fetch` if there's a communication problem like that.
 
 If you want to see something simple and easy to follow, to understand how the Rust itself works here, look at [main.rs.default_code](src/main.rs.default_code), which is a Rust version of exactly the same code that your character normally starts with by default.  Except without the `attack_mode` variable, because why?
-
-One important note: because of the system used to make sure that commands are not missed, if you stop either side, you must stop both and restart; see [porting-to-other-languages/](porting-to-other-languages/README.md) for why if you're interested.

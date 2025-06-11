@@ -68,8 +68,12 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
                 print(f"aland-to-python: GET {self.path}")
 
             newnum = int(self.path[1:])
+            # Here only, a sequence reset is allowed
             if newnum != LASTNUM + 1:
-                raise ValueError(f"FATAL: Call number not in sequence, expected {LASTNUM + 1} got {newnum}.")
+                if newnum == 1:
+                    print("Sequence number reset");
+                else:
+                    raise ValueError(f"FATAL: Call number not in sequence, expected {LASTNUM + 1} got {newnum}.")
 
             LASTNUM = newnum
 

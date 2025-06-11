@@ -17,7 +17,7 @@ The only complex thing is that the actual json that's passed around is `[NUM, ST
 
 The only reason that number exists is so that if a request is lost, the system will bail, so you can't end up with partially-applied scripts.
 
-The number system is currently very stupid; in particular, if you restart either side, you must restart both sides, because if for example you are running this way and you Disengage and then Engage on the Adventure Land side, the Python layer will say "wait I'm seeing sequence number 1 instead of 87 or whatever" and bail.
+The number system is currently pretty stupid, but does the job.
 
 Other Options
 =============

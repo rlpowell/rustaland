@@ -87,7 +87,12 @@ pub fn info_both(string: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn get_id(v: &Value) -> &str {
-    v["id"].as_str().unwrap()
+    // We use null to reset our target for example
+    if v.is_null() {
+        "null"
+    } else {
+        v["id"].as_str().unwrap()
+    }
 }
 
 /*
@@ -115,7 +120,10 @@ pub fn debug_both(string: &str) -> Result<(), Box<dyn std::error::Error>> {
 pub fn deref_entity(v: &Value) -> String {
     if v["me"] == json!(1) {
         "character".to_string()
+    } else if v["id"].is_null() {
+        // coords obj, hopefully
+        v.to_string()
     } else {
-        format!("parent.entities[{}]", get_id(v))
+        format!("parent.entities[{}] || G.npcs[{}]", get_id(v), get_id(v))
     }
 }
