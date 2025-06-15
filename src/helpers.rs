@@ -79,6 +79,7 @@ pub fn debug_local(string: &str) {
     }
 }
 
+// TODO: Print timestamp (just in the local version?)
 pub fn info_both(string: &str) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("{}", string);
     // set_message(Value::String("No monsters found.".to_string()), Value::Null)?;

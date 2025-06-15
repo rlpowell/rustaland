@@ -32,6 +32,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut said_attacking = false;
     let mut is_fleeing = false;
     let mut said_fleeing = false;
+    let mut is_rehoming = false;
+    let mut said_rehoming = false;
+
+    // TODO: make a type for locations; would also affect find_npc and smart_move, if we wanted to
+    // do it properly
+    let areas = vec![
+        (
+            "Spooky Forest Snakes",
+            json!({"map":"halloween", "in":"halloween", "x":-583, "y":-217}),
+        ),
+        (
+            "Mainland Crabs",
+            json!({"map":"main", "in":"main", "x":-1157, "y":-58}),
+        ),
+        (
+            "Mainland Bees",
+            json!({"map":"main", "in":"main", "x":313, "y":1143}),
+        ),
+    ];
+    let mut next_area: usize = 0;
 
     // Clear any target from a previous run
     change_target(&Null)?;
@@ -45,10 +65,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         let character = get_js_var("character".to_owned())?;
-
-        if is_moving(&character)?.as_bool().unwrap() {
-            continue;
-        }
 
         // Stored from largest to smallest
         let mut hp_potions: Vec<(u64, u64, std::string::String)> = vec![];
@@ -93,11 +109,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 >= potion.0
                 || character["hp"].as_u64().unwrap() < 500
             {
-                info_both(&format!(
-                    "Using HP potion {} in slot {} for {} HP",
-                    potion.2, potion.1, potion.0
-                ))?;
-                equip(json!(potion.1), Null)?;
+                if !is_on_cooldown(json!("use_hp"))?.as_bool().unwrap() {
+                    info_both(&format!(
+                        "Using HP potion {} in slot {} for {} HP",
+                        potion.2, potion.1, potion.0
+                    ))?;
+                    equip(json!(potion.1), Null)?;
+                }
                 break;
             }
         }
@@ -107,17 +125,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 >= potion.0
                 || character["mp"].as_u64().unwrap() < 50
             {
-                info_both(&format!(
-                    "Using MP potion {} in slot {} for {} MP",
-                    potion.2, potion.1, potion.0
-                ))?;
-                equip(json!(potion.1), Null)?;
+                if !is_on_cooldown(json!("use_mp"))?.as_bool().unwrap() {
+                    info_both(&format!(
+                        "Using MP potion {} in slot {} for {} MP",
+                        potion.2, potion.1, potion.0
+                    ))?;
+                    equip(json!(potion.1), Null)?;
+                }
                 break;
             }
         }
 
+        // Skip if moving *after* potions
+        if is_moving(&character)?.as_bool().unwrap() {
+            continue;
+        }
+
         // *** Conditions For Fleeing
-        if character["hp"].as_u64().unwrap() < 1000 {
+        if character["hp"].as_f64().unwrap() < (character["max_hp"].as_f64().unwrap() * 0.75) {
+            is_fleeing = true;
+        }
+
+        if character["mp"].as_f64().unwrap() < (character["max_mp"].as_f64().unwrap() * 0.25) {
             is_fleeing = true;
         }
 
@@ -142,11 +171,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Done fleeing but you have no potions; sleeping, kill the script when you see this.",
                     )?;
                     thread::sleep(Duration::from_secs(99999999));
+                } else {
+                    // Go back to current target area
+                    is_rehoming = true;
                 }
             } else {
                 smart_move(coords, Null)?;
+                // Don't bother to do other stuff if we're focused on moving
+                continue;
             }
-            continue;
+        }
+
+        if is_rehoming {
+            if !said_rehoming {
+                info_both(&format!("Rehoming to {}.", areas[next_area].0))?;
+                said_rehoming = true;
+            }
+
+            let coords = areas[next_area].1.clone();
+
+            if simple_distance(&character, &coords)?.as_f64().unwrap() < 50.0 {
+                info_both(&format!("Done rehoming to {}.", areas[next_area].0))?;
+                is_rehoming = false;
+                said_rehoming = false;
+                next_area = (next_area + 1) % areas.len();
+            } else {
+                smart_move(coords, Null)?;
+                // Don't bother to do other stuff if we're focused on moving
+                continue;
+            }
         }
 
         loot(Null)?;
@@ -158,10 +211,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut target = get_targeted_monster()?;
 
+        // TODO: add up the attack totals of all things targetting us, flee as appropriate
         if target.is_null() {
             info_both("No current target, looking for new target.")?;
             said_target = false;
             said_attacking = false;
+
+            loot(Null)?;
 
             // Look for something that:
             // - has a max attack no higher than twice the character's
@@ -181,7 +237,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 g_levels[&character_level.to_string()].as_f64().unwrap() / 100.0;
 
             for hostile in nearby_hostiles.as_array().unwrap() {
-                if hostile["attack"].as_u64().unwrap() > (character["attack"].as_u64().unwrap() * 2)
+                // Avoid monsters with high DPS
+                if (hostile["attack"].as_f64().unwrap() * hostile["frequency"].as_f64().unwrap())
+                    > (character["max_hp"].as_f64().unwrap() * 0.1)
                 {
                     continue;
                 }
@@ -190,8 +248,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
+                // Skip target dummies
+                if hostile["mtype"].as_str().unwrap().contains("target") {
+                    continue;
+                }
+
                 let cur_hits_to_kill =
                     hostile["hp"].as_f64().unwrap() / character["attack"].as_f64().unwrap();
+
+                if cur_hits_to_kill > 100.0 {
+                    continue;
+                }
+
                 let cur_xp_per_hit = hostile["xp"].as_f64().unwrap() / cur_hits_to_kill;
 
                 if cur_xp_per_hit > best_monster_xp_per_hit {
@@ -202,6 +270,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if target.is_null() {
                 info_both("No matching monsters found.")?;
+                is_rehoming = true;
                 continue;
             } else if target.is_object() {
                 eprintln!("Changing to new target {}", target["name"]);
