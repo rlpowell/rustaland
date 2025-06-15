@@ -6,6 +6,8 @@ If possible you should test connectivity; typically this means running `curl [UR
 
 Once you're sure the server is running and reachable, you need to copy [aland_side.js](aland_side.js) into your Adventure Land code window, replacing whatever's there (maybe make a copy first).  Change `URL` to match however it's going to reach your server.
 
+PERFORMANCE NOTE: aland_side.js deliberately has a quarter second delay each time it loops.  This is very good for early trying stuff out, but you'll likely want to change that once you trust your code.
+
 NOTE: Unless you want to set up your server with an SSL certificate, you *must* play Adventure Land with SSL turned off, or it simply won't work; browser security will refuse to make the connection.
 
 SECURITY NOTE: Whatever's at the other end of `URL` in your version of the Adventure Land side script can cause your browser to do anything it wants.  Make sure it's something you're in full control of.  (Although, to be fair, it's not like this is a common attack vector; anyone who tries to do this would have to know you use this system and have it in for you personally.)
