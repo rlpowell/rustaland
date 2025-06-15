@@ -67,6 +67,8 @@ async function mystuff() {
 
         debug("end of while");
 
+        // NOTE: You will almost certainly want to lower this 250
+        // once your code is working reliably
         await new Promise(r => setTimeout(r, 250));
     }
 }
