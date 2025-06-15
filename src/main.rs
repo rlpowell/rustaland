@@ -34,24 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut said_fleeing = false;
     let mut is_rehoming = false;
     let mut said_rehoming = false;
-
-    // TODO: make a type for locations; would also affect find_npc and smart_move, if we wanted to
-    // do it properly
-    let areas = vec![
-        (
-            "Spooky Forest Snakes",
-            json!({"map":"halloween", "in":"halloween", "x":-583, "y":-217}),
-        ),
-        (
-            "Mainland Crabs",
-            json!({"map":"main", "in":"main", "x":-1157, "y":-58}),
-        ),
-        (
-            "Mainland Bees",
-            json!({"map":"main", "in":"main", "x":313, "y":1143}),
-        ),
-    ];
-    let mut next_area: usize = 0;
+    let mut is_banking = false;
+    let mut said_banking = false;
 
     // Clear any target from a previous run
     change_target(&Null)?;
@@ -60,8 +44,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // aland repo
     let g_items = get_js_var("G.items".to_owned())?;
     let g_npcs = get_js_var("G.npcs".to_owned())?;
+    let g_maps = get_js_var("G.maps".to_owned())?;
     let g_levels_raw = get_js_var("G.levels".to_owned())?;
     let g_levels = g_levels_raw.as_object().unwrap();
+
+    // In order of preference
+    let monsters_to_kill = vec![
+        ("any", "pinkgoo"),
+        ("halloween", "osnake"),
+        ("halloween", "snake"),
+        ("halloween", "minimush"),
+        ("main", "croc"),
+        ("main", "armadillo"),
+        ("main", "snake"),
+        ("main", "crab"),
+        ("main", "bee"),
+        ("main", "goo"),
+    ];
+
+    // TODO: make a type for locations; would also affect find_npc and smart_move, if we wanted to
+    // do it properly
+    let mut areas: Vec<(std::string::String, serde_json::Value)> = vec![];
+
+    // Build up a list of area targets to check for monsters
+    for monster in &monsters_to_kill {
+        for map_name in g_maps.as_object().unwrap().keys() {
+            let mut count = 1;
+            let map_monsters = &g_maps[map_name]["monsters"];
+            if map_monsters.is_array() {
+                for map_monster in g_maps[map_name]["monsters"].as_array().unwrap() {
+                    if (monster.0 == "any" || map_name == monster.0)
+                        && map_monster["type"].as_str().unwrap() == monster.1
+                    {
+                        let boundary = map_monster["boundary"].as_array().unwrap();
+                        let mmx = boundary[0].as_f64().unwrap();
+                        let mmy = boundary[1].as_f64().unwrap();
+                        areas.push((
+                            format!("{} area {} in map {}", monster.1, count, map_name),
+                            json!({"map":map_name, "in":map_name, "x":mmx, "y":mmy}),
+                        ));
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut next_area: usize = 0;
 
     loop {
         let character = get_js_var("character".to_owned())?;
@@ -154,6 +183,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_fleeing = true;
         }
 
+        // Do we need to bank items?
+        //
+        // TODO: this is terrible in a way that appling a type to the character's items would
+        // almost certainly fix
+        if character["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|x| x.is_object())
+            .collect::<Vec<&serde_json::Value>>()
+            .len()
+            > 14
+        {
+            is_banking = true;
+        }
+
+        // TODO: fleeing and rehoming and banking all look very similar dontcha think?
+
+        if is_banking {
+            if !said_banking {
+                info_both("Banking.")?;
+                said_banking = true;
+            }
+            let coords = find_npc(json!("items0"))?;
+
+            if simple_distance(&character, &coords)?.as_f64().unwrap() < 200.0 {
+                for (index, item) in character["items"].as_array().unwrap().iter().enumerate() {
+                    if index > 13 && !item.is_null() {
+                        info_both(&format!(
+                            "Storing {} in the bank.",
+                            g_items[item["name"].as_str().unwrap()]["name"]
+                        ))?;
+                        bank_store(json!(index), Null, Null)?;
+                    }
+                }
+
+                info_both("Done banking, restarting monster search from the top.")?;
+                is_banking = false;
+                said_banking = false;
+                if total_hp_potions_count < 10 {
+                    info_both(
+                        "Done banking but you have no potions; sleeping, kill the script when you see this.",
+                    )?;
+                    thread::sleep(Duration::from_secs(99999999));
+                } else {
+                    // Go back to monster finding
+                    is_rehoming = true;
+
+                    // Start the monster cycle from the beginning after banking.
+                    next_area = 0;
+                }
+            } else {
+                smart_move(coords, Null)?;
+                // Don't bother to do other stuff if we're focused on moving
+                continue;
+            }
+        }
+
         // Flee *after* potions
         if is_fleeing {
             if !said_fleeing {
@@ -163,7 +250,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let coords = find_npc(json!("fancypots"))?;
 
             if simple_distance(&character, &coords)?.as_f64().unwrap() < 200.0 {
-                info_both("Done fleeing.")?;
+                info_both("Done fleeing, restarting monster search from the top.")?;
                 is_fleeing = false;
                 said_fleeing = false;
                 if total_hp_potions_count < 10 {
@@ -172,8 +259,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     thread::sleep(Duration::from_secs(99999999));
                 } else {
-                    // Go back to current target area
+                    // Go back to monster finding
                     is_rehoming = true;
+
+                    // Start the monster cycle from the beginning after fleeing.
+                    next_area = 0;
                 }
             } else {
                 smart_move(coords, Null)?;
@@ -212,59 +302,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut target = get_targeted_monster()?;
 
         // TODO: add up the attack totals of all things targetting us, flee as appropriate
+
         if target.is_null() {
             info_both("No current target, looking for new target.")?;
             said_target = false;
             said_attacking = false;
 
+            thread::sleep(Duration::from_millis(500));
             loot(Null)?;
 
-            // Look for something that:
-            // - has a max attack no higher than twice the character's
-            // - has at least 1% of the charaacter's XP to next level
-            // - has the highest XP per hit (assuming that one hit does exactly the character's
-            // attack damage); XP per hit is XP divided by the number of hits it takes to kill
+            for monster in &monsters_to_kill {
+                // TODO: there must be some better way to structure this
+                target = get_nearest_monster(
+                    json!({"target":true, "path_check":true, "type":monster.1}),
+                )?;
 
-            // TODO: start with monsters that are attacking us
-            // TODO: scrub monsters that are attacking someone else
-
-            let mut best_monster_xp_per_hit = 0.0;
-
-            let nearby_hostiles = get_nearby_hostiles(json!({"range": 100000, "limit": 50}))?;
-
-            let character_level = character["level"].as_u64().unwrap() as usize;
-            let one_percent_xp_to_next_level =
-                g_levels[&character_level.to_string()].as_f64().unwrap() / 100.0;
-
-            for hostile in nearby_hostiles.as_array().unwrap() {
-                // Avoid monsters with high DPS
-                if (hostile["attack"].as_f64().unwrap() * hostile["frequency"].as_f64().unwrap())
-                    > (character["max_hp"].as_f64().unwrap() * 0.1)
-                {
-                    continue;
-                }
-
-                if hostile["xp"].as_f64().unwrap() < one_percent_xp_to_next_level {
-                    continue;
-                }
-
-                // Skip target dummies
-                if hostile["mtype"].as_str().unwrap().contains("target") {
-                    continue;
-                }
-
-                let cur_hits_to_kill =
-                    hostile["hp"].as_f64().unwrap() / character["attack"].as_f64().unwrap();
-
-                if cur_hits_to_kill > 100.0 {
-                    continue;
-                }
-
-                let cur_xp_per_hit = hostile["xp"].as_f64().unwrap() / cur_hits_to_kill;
-
-                if cur_xp_per_hit > best_monster_xp_per_hit {
-                    best_monster_xp_per_hit = cur_xp_per_hit;
-                    target = hostile.clone();
+                if target.is_null() {
+                    target = get_nearest_monster(
+                        json!({"no_target":true, "path_check":true, "type":monster.1}),
+                    )?;
+                    if !target.is_null() {
+                        if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
+                            target = Null;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
+                        target = Null;
+                    } else {
+                        break;
+                    }
                 }
             }
 
@@ -280,6 +349,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 panic!("target is neither null nor object??");
             }
+
+            // There's XP-based and how-many-hits-to-kill code in some of the earlier checkins, if
+            // you need that; search on cur_hits_to_kill
         } else if target.is_object() {
             if !said_target {
                 info_both(&format!("Current target is {}", target["name"]))?;
