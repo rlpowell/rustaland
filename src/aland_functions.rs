@@ -148,17 +148,16 @@ pub fn throw_item(num: Value, x: Value, y: Value) -> Result<Value, Box<dyn std::
 
 #[allow(dead_code)]
 pub fn use_skill(
-    name: Value,
-    target: Value,
+    name: &str,
+    target: &Value,
     extra_arg: Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     #[allow(clippy::useless_format)]
-    let name_string = name.to_string();
-    let target_string = target.to_string();
     let extra_arg_string = extra_arg.to_string();
 
     handle_flow(format!(
-        "use_skill({name_string}, {target_string}, {extra_arg_string});"
+        "use_skill(\"{name}\", {}, {extra_arg_string});",
+        deref_entity(target)
     ))
 }
 
@@ -533,7 +532,12 @@ pub fn equip(num: Value, slot: Value) -> Result<Value, Box<dyn std::error::Error
     let num_string = num.to_string();
     let slot_string = slot.to_string();
 
-    handle_flow(format!("equip({num_string}, {slot_string});"))
+    let res = handle_flow(format!("equip({num_string}, {slot_string});"));
+
+    // Give things a bit to settle
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    res
 }
 
 #[allow(dead_code)]

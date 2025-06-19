@@ -95,6 +95,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let character = get_js_var("character".to_owned())?;
 
+        if character["rip"] != json!(0) && character["rip"] != json!(false) {
+            info_both("Character died; sleeping, kill the script when you see this.")?;
+            thread::sleep(Duration::from_secs(99999999));
+        }
+
         // Stored from largest to smallest
         let mut hp_potions: Vec<(u64, u64, std::string::String)> = vec![];
         let mut mp_potions: Vec<(u64, u64, std::string::String)> = vec![];
@@ -138,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 >= potion.0
                 || character["hp"].as_u64().unwrap() < 500
             {
-                if !is_on_cooldown(json!("use_hp"))?.as_bool().unwrap() {
+                if !is_on_cooldown(json!("use_hp"))?.as_bool().unwrap_or(true) {
                     info_both(&format!(
                         "Using HP potion {} in slot {} for {} HP",
                         potion.2, potion.1, potion.0
@@ -154,7 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 >= potion.0
                 || character["mp"].as_u64().unwrap() < 50
             {
-                if !is_on_cooldown(json!("use_mp"))?.as_bool().unwrap() {
+                if !is_on_cooldown(json!("use_mp"))?.as_bool().unwrap_or(true) {
                     info_both(&format!(
                         "Using MP potion {} in slot {} for {} MP",
                         potion.2, potion.1, potion.0
@@ -194,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|x| x.is_object())
             .collect::<Vec<&serde_json::Value>>()
             .len()
-            > 14
+            > 35
         {
             is_banking = true;
         }
@@ -247,10 +252,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info_both("Fleeing.")?;
                 said_fleeing = true;
             }
+
+            // Stun everybody so it's easier to get away
+            let target = get_nearest_monster(json!(Null))?;
+
+            if !is_on_cooldown(json!("stomp"))?.as_bool().unwrap_or(true) {
+                info_both("Using Stomp skill.")?;
+                use_skill("stomp", &target, Null)?;
+            }
+
             let coords = find_npc(json!("fancypots"))?;
 
             if simple_distance(&character, &coords)?.as_f64().unwrap() < 200.0 {
-                info_both("Done fleeing, restarting monster search from the top.")?;
+                info_both("Done fleeing, continuing monster search.")?;
                 is_fleeing = false;
                 said_fleeing = false;
                 if total_hp_potions_count < 10 {
@@ -261,9 +275,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     // Go back to monster finding
                     is_rehoming = true;
-
-                    // Start the monster cycle from the beginning after fleeing.
-                    next_area = 0;
                 }
             } else {
                 smart_move(coords, Null)?;
@@ -293,11 +304,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         loot(Null)?;
-
-        if character["rip"] != json!(0) && character["rip"] != json!(false) {
-            info_both("Character died; sleeping, kill the script when you see this.")?;
-            thread::sleep(Duration::from_secs(99999999));
-        }
 
         let mut target = get_targeted_monster()?;
 
@@ -370,7 +376,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info_both(&format!("Attacking {}", target["name"]))?;
                 said_attacking = true;
             }
-            attack(&target)?;
+            if !is_on_cooldown(json!("charge"))?.as_bool().unwrap_or(true) {
+                info_both("Using Charge skill.")?;
+                use_skill("charge", &target, Null)?;
+            }
+            if !is_on_cooldown(json!("attack"))?.as_bool().unwrap_or(true) {
+                attack(&target)?;
+            }
         }
     }
 
