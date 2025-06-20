@@ -1,4 +1,4 @@
-use serde_json::Value::*;
+use serde_json::Value;
 use serde_json::json;
 
 mod aland_functions;
@@ -12,9 +12,9 @@ use std::time::Duration;
 
 // Make a list of potions from largest to smallest
 fn pot_insert(
-    mut pots: Vec<(u64, u64, std::string::String)>,
-    new: (u64, u64, std::string::String),
-) -> Vec<(u64, u64, std::string::String)> {
+    mut pots: Vec<(u64, u64, String)>,
+    new: (u64, u64, String),
+) -> Vec<(u64, u64, String)> {
     if let Some(index) = pots.iter().position(|x| x.0 < new.0) {
         let ins_index = if index <= 0 { 0 } else { index - 1 };
         pots.insert(ins_index, new)
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut said_banking = false;
 
     // Clear any target from a previous run
-    change_target(&Null)?;
+    change_target(&Value::Null)?;
 
     // Grab the big data piles; there's so much more here, see `grep '\bG\.' js/html.js` in the
     // aland repo
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // TODO: make a type for locations; would also affect find_npc and smart_move, if we wanted to
     // do it properly
-    let mut areas: Vec<(std::string::String, serde_json::Value)> = vec![];
+    let mut areas: Vec<(String, serde_json::Value)> = vec![];
 
     // Build up a list of area targets to check for monsters
     for monster in &monsters_to_kill {
@@ -101,8 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Stored from largest to smallest
-        let mut hp_potions: Vec<(u64, u64, std::string::String)> = vec![];
-        let mut mp_potions: Vec<(u64, u64, std::string::String)> = vec![];
+        let mut hp_potions: Vec<(u64, u64, String)> = vec![];
+        let mut mp_potions: Vec<(u64, u64, String)> = vec![];
         let mut total_hp_potions_count: u64 = 0;
 
         // Find all our potions
@@ -148,7 +148,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Using HP potion {} in slot {} for {} HP",
                         potion.2, potion.1, potion.0
                     ))?;
-                    equip(json!(potion.1), Null)?;
+                    equip(json!(potion.1), Value::Null)?;
                 }
                 break;
             }
@@ -164,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "Using MP potion {} in slot {} for {} MP",
                         potion.2, potion.1, potion.0
                     ))?;
-                    equip(json!(potion.1), Null)?;
+                    equip(json!(potion.1), Value::Null)?;
                 }
                 break;
             }
@@ -220,7 +220,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "Storing {} in the bank.",
                             g_items[item["name"].as_str().unwrap()]["name"]
                         ))?;
-                        bank_store(json!(index), Null, Null)?;
+                        bank_store(json!(index), Value::Null, Value::Null)?;
                     }
                 }
 
@@ -240,7 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     next_area = 0;
                 }
             } else {
-                smart_move(coords, Null)?;
+                smart_move(coords, Value::Null)?;
                 // Don't bother to do other stuff if we're focused on moving
                 continue;
             }
@@ -254,11 +254,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Stun everybody so it's easier to get away
-            let target = get_nearest_monster(json!(Null))?;
+            let target = get_nearest_monster(json!(Value::Null))?;
 
             if !is_on_cooldown(json!("stomp"))?.as_bool().unwrap_or(true) {
                 info_both("Using Stomp skill.")?;
-                use_skill("stomp", &target, Null)?;
+                use_skill("stomp", &target, Value::Null)?;
             }
 
             let coords = find_npc(json!("fancypots"))?;
@@ -277,7 +277,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     is_rehoming = true;
                 }
             } else {
-                smart_move(coords, Null)?;
+                smart_move(coords, Value::Null)?;
                 // Don't bother to do other stuff if we're focused on moving
                 continue;
             }
@@ -297,13 +297,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 said_rehoming = false;
                 next_area = (next_area + 1) % areas.len();
             } else {
-                smart_move(coords, Null)?;
+                smart_move(coords, Value::Null)?;
                 // Don't bother to do other stuff if we're focused on moving
                 continue;
             }
         }
 
-        loot(Null)?;
+        loot(Value::Null)?;
 
         let mut target = get_targeted_monster()?;
 
@@ -315,7 +315,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             said_attacking = false;
 
             thread::sleep(Duration::from_millis(500));
-            loot(Null)?;
+            loot(Value::Null)?;
 
             for monster in &monsters_to_kill {
                 // TODO: there must be some better way to structure this
@@ -329,14 +329,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     if !target.is_null() {
                         if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
-                            target = Null;
+                            target = Value::Null;
                         } else {
                             break;
                         }
                     }
                 } else {
                     if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
-                        target = Null;
+                        target = Value::Null;
                     } else {
                         break;
                     }
@@ -367,10 +367,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             panic!("target is neither null nor object??");
         }
 
-        if !is_in_range(&target, Null)?.as_bool().unwrap() {
+        if !is_in_range(&target, Value::Null)?.as_bool().unwrap() {
             info_both(&format!("Moving towards {}", target["name"]))?;
 
-            smart_move(json!({"x": target["x"], "y": target["y"]}), Null)?;
+            smart_move(json!({"x": target["x"], "y": target["y"]}), Value::Null)?;
         } else if can_attack(&target)?.as_bool().unwrap() {
             if !said_attacking {
                 info_both(&format!("Attacking {}", target["name"]))?;
@@ -378,7 +378,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if !is_on_cooldown(json!("charge"))?.as_bool().unwrap_or(true) {
                 info_both("Using Charge skill.")?;
-                use_skill("charge", &target, Null)?;
+                use_skill("charge", &target, Value::Null)?;
             }
             if !is_on_cooldown(json!("attack"))?.as_bool().unwrap_or(true) {
                 attack(&target)?;
