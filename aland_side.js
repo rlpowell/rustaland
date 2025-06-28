@@ -74,7 +74,7 @@ async function mystuff() {
 }
 
 if( window.location.href.includes("https") ) {
-    debug("You must switch the game to http.");
+    game_log("You must switch the game to http.");
 } else {
     mystuff();
 }

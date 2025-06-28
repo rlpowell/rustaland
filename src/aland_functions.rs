@@ -406,22 +406,17 @@ pub fn xmove(x: Value, y: Value) -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[allow(dead_code)]
-pub fn is_in_range(target: &Value, skill: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let skill_string = skill.to_string();
-
+// NOTE: This version doesn't allow an empty skill name.
+pub fn is_in_range(target: &Value, skill: &str) -> Result<Value, Box<dyn std::error::Error>> {
     handle_flow(format!(
-        "is_in_range({}, {skill_string});",
+        "is_in_range({}, \"{skill}\");",
         deref_entity(target)
     ))
 }
 
 #[allow(dead_code)]
-pub fn is_on_cooldown(skill: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let skill_string = skill.to_string();
-
-    handle_flow(format!("is_on_cooldown({skill_string});"))
+pub fn is_on_cooldown(skill: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!("is_on_cooldown(\"{skill}\");"))
 }
 
 #[allow(dead_code)]
@@ -796,12 +791,8 @@ pub fn pm(name: Value, message: Value) -> Result<Value, Box<dyn std::error::Erro
 }
 
 #[allow(dead_code)]
-pub fn almove(x: Value, y: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let x_string = x.to_string();
-    let y_string = y.to_string();
-
-    handle_flow(format!("move({x_string}, {y_string});"))
+pub fn almove(x: f64, y: f64) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!("move({x}, {y});"))
 }
 
 #[allow(dead_code)]
@@ -1004,15 +995,13 @@ pub fn destroy(num: Value) -> Result<Value, Box<dyn std::error::Error>> {
 
 #[allow(dead_code)]
 pub fn send_party_invite(
-    name: Value,
+    name: &String,
     is_request: Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let name_string = name.to_string();
     let is_request_string = is_request.to_string();
 
     handle_flow(format!(
-        "send_party_invite({name_string}, {is_request_string});"
+        "send_party_invite(\"{name}\", {is_request_string});"
     ))
 }
 
@@ -1025,11 +1014,8 @@ pub fn send_party_request(name: Value) -> Result<Value, Box<dyn std::error::Erro
 }
 
 #[allow(dead_code)]
-pub fn accept_party_invite(name: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let name_string = name.to_string();
-
-    handle_flow(format!("accept_party_invite({name_string});"))
+pub fn accept_party_invite(name: &String) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!("accept_party_invite(\"{name}\");"))
 }
 
 #[allow(dead_code)]

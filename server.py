@@ -5,8 +5,6 @@ import socket
 import sys
 import subprocess
 
-my_subprocess = subprocess.Popen(['cargo', 'run'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-
 debug=False
 
 PORT = 50555
@@ -121,6 +119,11 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Allow", "POST,OPTIONS,HEAD,GET,TRACE")
         self.end_headers()
+
+if len(sys.argv) > 1:
+    PORT = int(sys.argv[1])
+
+my_subprocess = subprocess.Popen(['cargo', 'run', *sys.argv[2:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 
 with MyTCPServer(("", PORT), MyHandler) as httpd:
     print(f"Serving at port {PORT}")

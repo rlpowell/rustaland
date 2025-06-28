@@ -1,6 +1,9 @@
 use serde_json::Value;
 use serde_json::json;
 
+use std::env;
+use std::fs;
+
 mod aland_functions;
 mod helpers;
 
@@ -28,25 +31,59 @@ fn pot_insert(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     info_local("rust start");
 
-    let mut said_target = false;
-    let mut said_attacking = false;
-    let mut is_fleeing = false;
-    let mut said_fleeing = false;
-    let mut is_rehoming = false;
-    let mut said_rehoming = false;
-    let mut is_banking = false;
-    let mut said_banking = false;
+    let character = get_js_var("character".to_owned())?;
 
-    // Clear any target from a previous run
-    change_target(&Value::Null)?;
+    let args: Vec<String> = env::args().collect();
+
+    // Various global data setup stuff
+    let my_name = character["name"].as_str().unwrap().to_owned();
+
+    let lead_char = if my_name == args[1].clone() {
+        true
+    } else {
+        false
+    };
+
+    let mut party_data: PartyData;
+
+    // NOTE: You might need to manually delete this file if things have changed sufficiently
+    if fs::exists(party_data_file_name())? {
+        let data = fs::read_to_string(party_data_file_name())?;
+
+        party_data = serde_json::from_str(&data)?;
+    } else {
+        party_data = PartyData::new(args[1].clone(), args[1..].to_vec().clone())?;
+    }
+
+    let mut personal_data: PersonalData;
+
+    // NOTE: You might need to manually delete this file if things have changed sufficiently
+    let pdfname = personal_data_file_name(&my_name);
+
+    if fs::exists(&pdfname)? {
+        let data = fs::read_to_string(&pdfname)?;
+
+        personal_data = serde_json::from_str(&data)?;
+    } else {
+        personal_data = PersonalData::new(my_name.clone())?;
+    }
+
+    let mut local_game_data = LocalGameData { in_party: false };
+
+    eprintln!("game_data done");
+    eprintln!("{:#?}", &party_data);
+    eprintln!("{:#?}", &personal_data);
+
+    // // Clear any target from a previous run
+    // change_target(&Value::Null)?;
 
     // Grab the big data piles; there's so much more here, see `grep '\bG\.' js/html.js` in the
     // aland repo
     let g_items = get_js_var("G.items".to_owned())?;
-    let g_npcs = get_js_var("G.npcs".to_owned())?;
+    let _g_npcs = get_js_var("G.npcs".to_owned())?;
     let g_maps = get_js_var("G.maps".to_owned())?;
     let g_levels_raw = get_js_var("G.levels".to_owned())?;
-    let g_levels = g_levels_raw.as_object().unwrap();
+    let _g_levels = g_levels_raw.as_object().unwrap();
 
     // In order of preference
     let monsters_to_kill = vec![
@@ -90,10 +127,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut next_area: usize = 0;
+    // Set up the party
+    if !local_game_data.in_party {
+        let mut party_list = party_data.all_chars().clone();
+        party_list.sort();
+
+        loop {
+            let get_party = get_party()?;
+            let mut get_party_list = get_party
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(|x| x.to_owned())
+                .collect::<Vec<String>>();
+            get_party_list.sort();
+
+            if party_list == get_party_list {
+                info_both("Party set up!")?;
+                local_game_data.in_party = true;
+                break;
+            } else {
+                info_both("Party not yet set up, retrying.")?;
+
+                if lead_char {
+                    for name in party_data.all_chars() {
+                        if *name != my_name {
+                            send_party_invite(name, Value::Null)?;
+                        }
+                    }
+                } else {
+                    accept_party_invite(&party_data.lead_char())?;
+                }
+
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
 
     loop {
-        let character = get_js_var("character".to_owned())?;
+        // Read the party data; the lead_char writes and maintains this and therefore shouldn't
+        // need to read it
+        //
+        // TODO: Check timestamp to skip the file read for efficiency?
+        if !lead_char {
+            let data = fs::read_to_string(party_data_file_name()).expect("expect 1");
+
+            party_data = serde_json::from_str(&data)?;
+        }
+
+        // Get a bunch of data all at once to minimize fetch()es.  No idea why the outer parens are
+        // necessary but they ar.
+        let mut buncha_data_text =
+            format!("({{ \"{}\": character, \"party\": get_party()", &my_name).to_owned();
+        for name in party_data.all_chars().iter().filter(|x| x != &&my_name) {
+            buncha_data_text += &format!(", \"{}\": parent.entities[\"{}\"]", name, name);
+        }
+        buncha_data_text += " })";
+
+        let buncha_data = get_js_var(buncha_data_text)?;
+
+        // Split the data up
+        let character = buncha_data[&my_name].clone();
+        let get_party_data = buncha_data["party"].clone();
+
+        // TODO: Check that we have buncha_data for all characters
 
         if character["rip"] != json!(0) && character["rip"] != json!(false) {
             info_both("Character died; sleeping, kill the script when you see this.")?;
@@ -104,8 +201,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut hp_potions: Vec<(u64, u64, String)> = vec![];
         let mut mp_potions: Vec<(u64, u64, String)> = vec![];
         let mut total_hp_potions_count: u64 = 0;
+        let mut total_mp_potions_count: u64 = 0;
 
-        // Find all our potions
+        // Find all our potions; this is hard because the only way to find a potion is to look in
+        // our inventory for an item that "gives" hp or mp
         for (index, item) in character["items"].as_array().unwrap().iter().enumerate() {
             if !item.is_null() {
                 let item_name = item["name"].as_str().unwrap();
@@ -124,6 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                         if giver[0].as_str().unwrap() == "mp" {
+                            total_mp_potions_count += item["q"].as_u64().unwrap();
                             mp_potions = pot_insert(
                                 mp_potions,
                                 (
@@ -138,12 +238,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        if character["ctype"] == "priest" {
+            // Heal if needed
+            let heal_amount = character["heal"].as_f64().unwrap();
+            let need_healing = party_data
+                .all_chars()
+                .iter()
+                .filter(|x| needs_healing(heal_amount, &buncha_data[x]))
+                .collect::<Vec<&String>>();
+
+            if need_healing.len() > 1 {
+                if !is_on_cooldown("partyheal")?.as_bool().unwrap_or(true) {
+                    info_both("Using Party Heal skill.")?;
+                    use_skill("partyheal", &Value::Null, Value::Null)?;
+                }
+            } else if need_healing.len() == 1 {
+                approach_and_use_skill(&character, &buncha_data[need_healing[0]], "heal", "Heal")?;
+            }
+        }
+
         for potion in hp_potions {
-            if (character["max_hp"].as_u64().unwrap() - character["hp"].as_u64().unwrap())
-                >= potion.0
-                || character["hp"].as_u64().unwrap() < 500
-            {
-                if !is_on_cooldown(json!("use_hp"))?.as_bool().unwrap_or(true) {
+            // Now we have a healer, save potions for emergencies
+            //
+            // if (character["max_hp"].as_u64().unwrap() - character["hp"].as_u64().unwrap())
+            //     >= potion.0
+            //     || character["hp"].as_u64().unwrap() < 500
+            if (character["max_hp"].as_u64().unwrap() - character["hp"].as_u64().unwrap()) >= 1000 {
+                if !is_on_cooldown("use_hp")?.as_bool().unwrap_or(true) {
                     info_both(&format!(
                         "Using HP potion {} in slot {} for {} HP",
                         potion.2, potion.1, potion.0
@@ -159,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 >= potion.0
                 || character["mp"].as_u64().unwrap() < 50
             {
-                if !is_on_cooldown(json!("use_mp"))?.as_bool().unwrap_or(true) {
+                if !is_on_cooldown("use_mp")?.as_bool().unwrap_or(true) {
                     info_both(&format!(
                         "Using MP potion {} in slot {} for {} MP",
                         potion.2, potion.1, potion.0
@@ -176,21 +297,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // *** Conditions For Fleeing
-        if character["hp"].as_f64().unwrap() < (character["max_hp"].as_f64().unwrap() * 0.75) {
-            is_fleeing = true;
+        if character["hp"].as_f64().unwrap() < (character["max_hp"].as_f64().unwrap() * 0.50) {
+            eprintln!("fleeing 1");
+            personal_data.change_state(&party_data, false, State::Fleeing)?;
         }
 
         if character["mp"].as_f64().unwrap() < (character["max_mp"].as_f64().unwrap() * 0.25) {
-            is_fleeing = true;
+            eprintln!("fleeing 2");
+            personal_data.change_state(&party_data, false, State::Fleeing)?;
         }
 
         if total_hp_potions_count < 10 {
-            is_fleeing = true;
+            eprintln!("fleeing 3");
+            personal_data.change_state(&party_data, false, State::Fleeing)?;
+        }
+
+        if total_mp_potions_count < 10 {
+            eprintln!("fleeing 4");
+            personal_data.change_state(&party_data, false, State::Fleeing)?;
         }
 
         // Do we need to bank items?
         //
-        // TODO: this is terrible in a way that appling a type to the character's items would
+        // TODO: this is terrible in a way that applying a type to the character's items would
         // almost certainly fix
         if character["items"]
             .as_array()
@@ -201,19 +330,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .len()
             > 35
         {
-            is_banking = true;
+            eprintln!("banking 1");
+            personal_data.change_state(&party_data, false, State::Banking)?;
         }
 
-        // TODO: fleeing and rehoming and banking all look very similar dontcha think?
+        // Check that the party is still together
+        for name in party_data.all_chars() {
+            // TODO: fill this in
+        }
 
-        if is_banking {
-            if !said_banking {
-                info_both("Banking.")?;
-                said_banking = true;
+        // **** Rectify states
+
+        // Check if anyone is fleeing or banking
+        let states = everyones_states(&party_data)?;
+
+        if states.iter().any(|x| x == &State::Banking) {
+            eprintln!("anyone_banking");
+            personal_data.change_state(&party_data, false, State::Banking)?;
+        }
+
+        if states.iter().any(|x| x == &State::Fleeing) {
+            eprintln!("anyone_fleeing");
+            personal_data.change_state(&party_data, false, State::Fleeing)?;
+        }
+
+        if lead_char {
+            // The lead_char doesn't need to rectify its own state except in the fleeing and
+            // banking cases above I don't think?
+        } else {
+            let data = fs::read_to_string(personal_data_file_name(party_data.lead_char()))
+                .expect("expect 4");
+
+            let lead_char_data: PersonalData = serde_json::from_str(&data)?;
+
+            match &personal_data.state() {
+                State::Startup | State::Fleeing | State::Banking => {
+                    // Keep going until you're done
+                }
+                State::Attacking | State::Rehoming | State::Targeting => {
+                    // Match the lead character as needed
+                    if personal_data.state() != lead_char_data.state() {
+                        personal_data.change_state(
+                            &party_data,
+                            true,
+                            lead_char_data.state().clone(),
+                        )?;
+                    }
+                }
             }
-            let coords = find_npc(json!("items0"))?;
+        }
 
-            if simple_distance(&character, &coords)?.as_f64().unwrap() < 200.0 {
+        loot(Value::Null)?;
+
+        // eprintln!("About to hit the match: {:#?}", &personal_data.state());
+
+        match &personal_data.state() {
+            State::Banking => {
+                // TODO: use home skill
+                personal_data.announce_as_needed("Banking.")?;
+
+                if still_moving_to_npc(&character, "items0")? {
+                    continue;
+                }
+
                 for (index, item) in character["items"].as_array().unwrap().iter().enumerate() {
                     if index > 13 && !item.is_null() {
                         info_both(&format!(
@@ -225,165 +404,205 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 info_both("Done banking, restarting monster search from the top.")?;
-                is_banking = false;
-                said_banking = false;
-                if total_hp_potions_count < 10 {
-                    info_both(
-                        "Done banking but you have no potions; sleeping, kill the script when you see this.",
-                    )?;
-                    thread::sleep(Duration::from_secs(99999999));
-                } else {
-                    // Go back to monster finding
-                    is_rehoming = true;
 
-                    // Start the monster cycle from the beginning after banking.
-                    next_area = 0;
+                if lead_char {
+                    party_data.set_next_area(0)?;
                 }
-            } else {
-                smart_move(coords, Value::Null)?;
-                // Don't bother to do other stuff if we're focused on moving
-                continue;
+
+                check_if_bailing(total_hp_potions_count)?;
+
+                personal_data.change_state(&party_data, true, State::Rehoming)?;
             }
-        }
+            State::Targeting => {
+                if lead_char {
+                    let mut target = Value::Null;
 
-        // Flee *after* potions
-        if is_fleeing {
-            if !said_fleeing {
-                info_both("Fleeing.")?;
-                said_fleeing = true;
-            }
+                    if !party_data.targets().is_empty() {
+                        let target_id = party_data.targets()[0].clone();
+                        target = get_js_var(format!("parent.entities[{}]", target_id))?;
+                    }
 
-            // Stun everybody so it's easier to get away
-            let target = get_nearest_monster(json!(Value::Null))?;
+                    // TODO: add up the attack totals of all things targetting us, flee as appropriate; see telegram notes
 
-            if !is_on_cooldown(json!("stomp"))?.as_bool().unwrap_or(true) {
-                info_both("Using Stomp skill.")?;
-                use_skill("stomp", &target, Value::Null)?;
-            }
+                    if target.is_null() {
+                        info_both("No current target, looking for new target.")?;
 
-            let coords = find_npc(json!("fancypots"))?;
+                        loot(Value::Null)?;
 
-            if simple_distance(&character, &coords)?.as_f64().unwrap() < 200.0 {
-                info_both("Done fleeing, continuing monster search.")?;
-                is_fleeing = false;
-                said_fleeing = false;
-                if total_hp_potions_count < 10 {
-                    info_both(
-                        "Done fleeing but you have no potions; sleeping, kill the script when you see this.",
-                    )?;
-                    thread::sleep(Duration::from_secs(99999999));
+                        for monster in &monsters_to_kill {
+                            // TODO: there must be some better way to structure this
+                            target = get_nearest_monster(
+                                json!({"target":true, "path_check":true, "type":monster.1}),
+                            )?;
+
+                            if target.is_null() {
+                                target = get_nearest_monster(
+                                    json!({"no_target":true, "path_check":true, "type":monster.1}),
+                                )?;
+                                if !target.is_null() {
+                                    if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
+                                        target = Value::Null;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            } else {
+                                if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
+                                    target = Value::Null;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if target.is_null() {
+                            info_both("No matching monsters found.")?;
+                            personal_data.change_state(&party_data, true, State::Rehoming)?;
+                        } else if target.is_object() {
+                            personal_data.announce_as_needed(&format!(
+                                "Changing to new target {}",
+                                target["name"]
+                            ))?;
+
+                            change_target(&target)?;
+
+                            party_data
+                                .set_targets(vec![target["id"].as_str().unwrap().to_owned()])?;
+
+                            personal_data.change_state(&party_data, true, State::Attacking)?;
+                        } else {
+                            panic!("target is neither null nor object??");
+                        }
+
+                        // There's XP-based and how-many-hits-to-kill code in some of the earlier checkins, if
+                        // you need that; search on cur_hits_to_kill
+                    } else if target.is_object() {
+                        personal_data
+                            .announce_as_needed(&format!("Current target is {}", target["name"]))?;
+
+                        personal_data.change_state(&party_data, true, State::Attacking)?;
+                    } else {
+                        panic!("target is neither null nor object??");
+                    }
                 } else {
-                    // Go back to monster finding
-                    is_rehoming = true;
+                    eprintln!("Waiting on lead char for targetting");
+                    thread::sleep(Duration::from_millis(200));
                 }
-            } else {
-                smart_move(coords, Value::Null)?;
-                // Don't bother to do other stuff if we're focused on moving
-                continue;
             }
-        }
+            State::Attacking => {
+                // TODO: Kiting for ranged
 
-        if is_rehoming {
-            if !said_rehoming {
-                info_both(&format!("Rehoming to {}.", areas[next_area].0))?;
-                said_rehoming = true;
-            }
+                let mut target_id = "".to_owned();
 
-            let coords = areas[next_area].1.clone();
+                if !party_data.targets().is_empty() {
+                    target_id = party_data.targets()[0].clone();
+                }
 
-            if simple_distance(&character, &coords)?.as_f64().unwrap() < 50.0 {
-                info_both(&format!("Done rehoming to {}.", areas[next_area].0))?;
-                is_rehoming = false;
-                said_rehoming = false;
-                next_area = (next_area + 1) % areas.len();
-            } else {
-                smart_move(coords, Value::Null)?;
-                // Don't bother to do other stuff if we're focused on moving
-                continue;
-            }
-        }
-
-        loot(Value::Null)?;
-
-        let mut target = get_targeted_monster()?;
-
-        // TODO: add up the attack totals of all things targetting us, flee as appropriate
-
-        if target.is_null() {
-            info_both("No current target, looking for new target.")?;
-            said_target = false;
-            said_attacking = false;
-
-            thread::sleep(Duration::from_millis(500));
-            loot(Value::Null)?;
-
-            for monster in &monsters_to_kill {
-                // TODO: there must be some better way to structure this
-                target = get_nearest_monster(
-                    json!({"target":true, "path_check":true, "type":monster.1}),
-                )?;
+                let target = get_js_var(format!("parent.entities[{}]", target_id))?;
 
                 if target.is_null() {
-                    target = get_nearest_monster(
-                        json!({"no_target":true, "path_check":true, "type":monster.1}),
-                    )?;
-                    if !target.is_null() {
-                        if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
-                            target = Value::Null;
-                        } else {
-                            break;
-                        }
+                    if lead_char {
+                        personal_data.change_state(&party_data, true, State::Targeting)?;
+                        continue;
+                    } else {
+                        eprintln!("Waiting on lead char for new target");
+                        thread::sleep(Duration::from_millis(200));
                     }
                 } else {
-                    if target.as_object().unwrap()["level"].as_u64().unwrap() < 3 {
-                        target = Value::Null;
-                    } else {
-                        break;
+                    match character["ctype"].as_str().unwrap() {
+                        "priest" => {
+                            personal_data
+                                .announce_as_needed(&format!("Attacking {}", target["name"]))?;
+
+                            // TODO: Kiting for ranged
+                            approach_and_use_skill(&character, &target, "attack", "Attack")?;
+
+                            // TODO: other priest skills
+                            if character["level"].as_u64().unwrap() > 55 {
+                                // Draw aggro if needed
+                                let mut draw_aggro = false;
+                                for name in party_data.all_chars().iter().filter(|x| x != &&my_name)
+                                {
+                                    let gnm = get_nearest_monster(json!({"target": name}))?;
+                                    if !gnm.is_null() {
+                                        draw_aggro = true;
+                                    }
+                                }
+
+                                if draw_aggro {
+                                    if !is_on_cooldown("absorb")?.as_bool().unwrap_or(true) {
+                                        info_both("Using Absorb skill.")?;
+                                        use_skill("absorb", &Value::Null, Value::Null)?;
+                                    }
+                                }
+                            }
+                        }
+                        "warrior" => {
+                            // TODO: other warrior skills
+
+                            personal_data
+                                .announce_as_needed(&format!("Attacking {}", target["name"]))?;
+
+                            if !is_on_cooldown("charge")?.as_bool().unwrap_or(true) {
+                                info_both("Using Charge skill.")?;
+                                use_skill("charge", &target, Value::Null)?;
+                            }
+
+                            approach_and_use_skill(&character, &target, "attack", "Attack")?;
+                        }
+                        _ => {
+                            todo!("What the hell?");
+                        }
                     }
                 }
             }
+            State::Fleeing => {
+                // TODO: use town skill
 
-            if target.is_null() {
-                info_both("No matching monsters found.")?;
-                is_rehoming = true;
-                continue;
-            } else if target.is_object() {
-                eprintln!("Changing to new target {}", target["name"]);
+                personal_data.announce_as_needed("Fleeing.")?;
 
-                said_target = true;
-                change_target(&target)?;
-            } else {
-                panic!("target is neither null nor object??");
-            }
+                // Stun everybody so it's easier to get away
+                let target = get_nearest_monster(json!(Value::Null))?;
 
-            // There's XP-based and how-many-hits-to-kill code in some of the earlier checkins, if
-            // you need that; search on cur_hits_to_kill
-        } else if target.is_object() {
-            if !said_target {
-                info_both(&format!("Current target is {}", target["name"]))?;
-                said_target = true;
-            }
-        } else {
-            panic!("target is neither null nor object??");
-        }
+                if character["ctype"].as_str().unwrap() == "warrior" {
+                    if !is_on_cooldown("stomp")?.as_bool().unwrap_or(true) {
+                        info_both("Using Stomp skill.")?;
+                        use_skill("stomp", &target, Value::Null)?;
+                    }
+                }
 
-        if !is_in_range(&target, Value::Null)?.as_bool().unwrap() {
-            info_both(&format!("Moving towards {}", target["name"]))?;
+                if still_moving_to_npc(&character, "fancypots")? {
+                    continue;
+                }
 
-            smart_move(json!({"x": target["x"], "y": target["y"]}), Value::Null)?;
-        } else if can_attack(&target)?.as_bool().unwrap() {
-            if !said_attacking {
-                info_both(&format!("Attacking {}", target["name"]))?;
-                said_attacking = true;
+                info_both("Done fleeing, continuing monster search.")?;
+
+                check_if_bailing(total_hp_potions_count)?;
+
+                personal_data.change_state(&party_data, true, State::Rehoming)?;
             }
-            if !is_on_cooldown(json!("charge"))?.as_bool().unwrap_or(true) {
-                info_both("Using Charge skill.")?;
-                use_skill("charge", &target, Value::Null)?;
+            State::Rehoming => {
+                let next_area = party_data.next_area().clone();
+
+                personal_data
+                    .announce_as_needed(&format!("Rehoming to {}.", areas[next_area].0))?;
+
+                if still_moving_to_location(&character, areas[next_area].1.clone())? {
+                    continue;
+                }
+
+                info_both(&format!("Done rehoming to {}.", areas[next_area].0))?;
+
+                if lead_char {
+                    party_data.set_next_area((next_area + 1) % areas.len())?;
+                }
+
+                personal_data.change_state(&party_data, true, State::Targeting)?;
             }
-            if !is_on_cooldown(json!("attack"))?.as_bool().unwrap_or(true) {
-                attack(&target)?;
+            State::Startup => {
+                personal_data.change_state(&party_data, true, State::Rehoming)?;
             }
-        }
+        };
     }
 
     Ok(())
