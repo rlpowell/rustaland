@@ -11,9 +11,10 @@ const DBG: bool = false;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
 pub enum State {
-    Banking,
     Attacking,
+    Banking,
     Fleeing,
+    Gathering,
     Rehoming,
     Startup,
     Targeting,
@@ -74,6 +75,25 @@ impl PartyData {
         Ok(())
     }
 
+    pub fn set_all_chars(
+        &mut self,
+        all_chars: Vec<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.all_chars = all_chars;
+
+        self.write_to_file()?;
+
+        Ok(())
+    }
+
+    pub fn set_lead_char(&mut self, lead_char: String) -> Result<(), Box<dyn std::error::Error>> {
+        self.lead_char = lead_char;
+
+        self.write_to_file()?;
+
+        Ok(())
+    }
+
     pub fn all_chars(&self) -> &Vec<String> {
         &self.all_chars
     }
@@ -97,6 +117,8 @@ pub struct PersonalData {
     my_name: String,
     state: State,
     has_announced: bool,
+    waiting_for_sync: bool,
+    sync_count: usize,
 }
 
 impl PersonalData {
@@ -105,6 +127,8 @@ impl PersonalData {
             my_name: my_name,
             state: State::Startup,
             has_announced: false,
+            waiting_for_sync: false,
+            sync_count: 0,
         };
 
         new_self.write_to_file()?;
@@ -132,27 +156,10 @@ impl PersonalData {
         eprintln!("Changing state to {:#?}", new_state);
         self.state = new_state.clone();
         self.has_announced = false;
+        self.waiting_for_sync = sync;
+        self.sync_count = 0;
 
         self.write_to_file()?;
-
-        if sync {
-            loop {
-                let states = everyones_states(party_data)?;
-
-                if states.iter().all(|x| x == &new_state) {
-                    break;
-                } else {
-                    eprintln!("Waiting for sync on {:#?}", new_state);
-                    thread::sleep(Duration::from_millis(100));
-                    // TODO: after several tries, maybe with increasing times, reset to a
-                    // particular state ??? which one?
-
-                    // TODO: Looping here is not working because they can still get attacked and
-                    // die; need to head back out and loop around the main function still; add a
-                    // personal data flag?
-                }
-            }
-        }
 
         Ok(())
     }
@@ -173,6 +180,22 @@ impl PersonalData {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    pub fn waiting_for_sync(&self) -> bool {
+        self.waiting_for_sync
+    }
+
+    pub fn set_waiting_for_sync(&mut self, waiting_for_sync: bool) {
+        self.waiting_for_sync = waiting_for_sync;
+    }
+
+    pub fn sync_count(&self) -> usize {
+        self.sync_count
+    }
+
+    pub fn set_sync_count(&mut self, sync_count: usize) {
+        self.sync_count = sync_count
     }
 }
 
@@ -323,7 +346,6 @@ pub fn still_moving_to_location(
     coords: Value,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if simple_distance(character, &coords)?.as_f64().unwrap() > 200.0 {
-        // TODO: change to function that also runs any movement skills
         smart_move(coords, Value::Null)?;
         Ok(true)
     } else {
@@ -338,7 +360,6 @@ pub fn still_moving_to_npc(
     let coords = find_npc(json!(npcid))?;
 
     if simple_distance(character, &coords)?.as_f64().unwrap() > 200.0 {
-        // TODO: change to function that also runs any movement skills
         smart_move(coords, Value::Null)?;
         Ok(true)
     } else {

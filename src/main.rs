@@ -51,6 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let data = fs::read_to_string(party_data_file_name())?;
 
         party_data = serde_json::from_str(&data)?;
+        // Set stuff from the command line
+        party_data.set_lead_char(args[1].clone())?;
+        party_data.set_all_chars(args[1..].to_vec().clone())?;
     } else {
         party_data = PartyData::new(args[1].clone(), args[1..].to_vec().clone())?;
     }
@@ -128,6 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Set up the party
+    //
+    // TODO: The party seems to break sometimes; move this into the loop
     if !local_game_data.in_party {
         let mut party_list = party_data.all_chars().clone();
         party_list.sort();
@@ -189,6 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Split the data up
         let character = buncha_data[&my_name].clone();
         let get_party_data = buncha_data["party"].clone();
+        // eprintln!("gpd {:#?}", &get_party_data);
 
         // TODO: Check that we have buncha_data for all characters
 
@@ -364,7 +370,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let lead_char_data: PersonalData = serde_json::from_str(&data)?;
 
             match &personal_data.state() {
-                State::Startup | State::Fleeing | State::Banking => {
+                State::Startup | State::Fleeing | State::Banking | State::Gathering => {
                     // Keep going until you're done
                 }
                 State::Attacking | State::Rehoming | State::Targeting => {
@@ -382,9 +388,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         loot(Value::Null)?;
 
+        // Handle state sync
+        if personal_data.waiting_for_sync() {
+            if personal_data.sync_count() > 10 {
+                eprintln!("Too many sync attempts, gathering.");
+                personal_data.change_state(&party_data, false, State::Gathering)?;
+            } else {
+                let states = everyones_states(&party_data)?;
+
+                if states.iter().all(|x| x == personal_data.state()) {
+                    personal_data.set_waiting_for_sync(false);
+                    personal_data.set_sync_count(0);
+                } else {
+                    eprintln!("Waiting for sync on {:#?}", personal_data.state());
+                    thread::sleep(Duration::from_millis(100));
+                }
+
+                personal_data.set_sync_count(personal_data.sync_count() + 1);
+            }
+        }
+
         // eprintln!("About to hit the match: {:#?}", &personal_data.state());
 
         match &personal_data.state() {
+            State::Gathering => {
+                eprint!("gpd: {:#?}", get_party_data);
+                thread::sleep(Duration::from_millis(100));
+                if lead_char {
+                    eprintln!("Waiting for others to gather.");
+                    let mut someone_too_far = false;
+                    for name in party_data.all_chars().iter().filter(|x| x != &&my_name) {
+                        let map_name = get_party_data[name]["map"].as_str().unwrap();
+                        let ocx = my_as_f64(&get_party_data[name]["x"]);
+                        let ocy = my_as_f64(&get_party_data[name]["y"]);
+
+                        if simple_distance(
+                            &character,
+                            &json!({"map":map_name, "in":map_name, "x":ocx, "y":ocy}),
+                        )?
+                        .as_f64()
+                        .unwrap()
+                            > 200.0
+                        {
+                            someone_too_far = true;
+                        }
+                    }
+
+                    if !someone_too_far {
+                        personal_data.change_state(&party_data, true, State::Rehoming)?;
+                    }
+                } else {
+                    let map_name = get_party_data[&party_data.lead_char()]["map"]
+                        .as_str()
+                        .unwrap();
+                    let lcx = my_as_f64(&get_party_data[&party_data.lead_char()]["x"]);
+                    let lcy = my_as_f64(&get_party_data[&party_data.lead_char()]["y"]);
+                    if still_moving_to_location(
+                        &character,
+                        json!({"map":map_name, "in":map_name, "x":lcx, "y":lcy}),
+                    )? {
+                        continue;
+                    } else {
+                        personal_data.change_state(&party_data, true, State::Rehoming)?;
+                    }
+                }
+            }
             State::Banking => {
                 // TODO: use home skill
                 personal_data.announce_as_needed("Banking.")?;
@@ -486,7 +554,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 } else {
                     eprintln!("Waiting on lead char for targetting");
-                    thread::sleep(Duration::from_millis(200));
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
             State::Attacking => {
@@ -506,7 +574,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     } else {
                         eprintln!("Waiting on lead char for new target");
-                        thread::sleep(Duration::from_millis(200));
+                        thread::sleep(Duration::from_millis(100));
                     }
                 } else {
                     match character["ctype"].as_str().unwrap() {
@@ -547,6 +615,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 info_both("Using Charge skill.")?;
                                 use_skill("charge", &target, Value::Null)?;
                             }
+
+                            approach_and_use_skill(&character, &target, "attack", "Attack")?;
+                        }
+                        "ranger" => {
+                            // TODO: other ranger skills
+
+                            personal_data
+                                .announce_as_needed(&format!("Attacking {}", target["name"]))?;
 
                             approach_and_use_skill(&character, &target, "attack", "Attack")?;
                         }
