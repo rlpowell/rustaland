@@ -388,21 +388,13 @@ pub fn change_target_privately(target: &Value) -> Result<Value, Box<dyn std::err
 }
 
 #[allow(dead_code)]
-pub fn can_move_to(x: Value, y: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let x_string = x.to_string();
-    let y_string = y.to_string();
-
-    handle_flow(format!("can_move_to({x_string}, {y_string});"))
+pub fn can_move_to(x: f64, y: f64) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!("can_move_to({x}, {y});"))
 }
 
 #[allow(dead_code)]
-pub fn xmove(x: Value, y: Value) -> Result<Value, Box<dyn std::error::Error>> {
-    #[allow(clippy::useless_format)]
-    let x_string = x.to_string();
-    let y_string = y.to_string();
-
-    handle_flow(format!("xmove({x_string}, {y_string});"))
+pub fn xmove(x: f64, y: f64) -> Result<Value, Box<dyn std::error::Error>> {
+    handle_flow(format!("xmove({x}, {y});"))
 }
 
 #[allow(dead_code)]
@@ -1436,7 +1428,10 @@ pub fn disconnect() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[allow(dead_code)]
-pub fn smart_move(destination: Value, on_done: Value) -> Result<Value, Box<dyn std::error::Error>> {
+pub fn smart_move(
+    destination: &Value,
+    on_done: Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
     // If we just send like `parent.entities["$Ernis"]` we don't want to process that further
     let destination_string = if destination.is_string() {
         destination.as_str().unwrap().to_owned()
@@ -1543,10 +1538,10 @@ pub fn code_draw() -> Result<Value, Box<dyn std::error::Error>> {
 }
 
 #[allow(dead_code)]
-pub fn simple_distance(a: &Value, b: &Value) -> Result<Value, Box<dyn std::error::Error>> {
-    handle_flow(format!(
+pub fn simple_distance(a: &Value, b: &Value) -> Result<f64, Box<dyn std::error::Error>> {
+    Ok(my_as_f64(&handle_flow(format!(
         "simple_distance({}, {});",
         deref_entity(a),
         deref_entity(b)
-    ))
+    ))?))
 }

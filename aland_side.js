@@ -5,6 +5,7 @@ URL="http://localhost:50555/"
 function debug(string) {
     if(DEBUG) {
         game_log(string);
+        console.log(string);
     }
 }
 
@@ -35,7 +36,22 @@ async function mystuff() {
                 LASTNUM = newnum;
             }
             command = data[1];
-            output = eval(command);
+            output = ""
+            try {
+                // Some things are easier if this is `await eval`
+                // instead, because it waits for them to actually
+                // complete, but it eans that we can't do *literally
+                // anything* while running smart_move, which sucks.
+                //
+                // If wanting to wait for stuff becomes a problem
+                // later, could try an if statement between await
+                // and non-await based on the contents of the
+                // command.
+                output = eval(command);
+            } catch (error) {
+                output = "{}"
+                game_log('command error:' + parent.game_stringify(error));
+            }
 
             debug("output:");
             debug(parent.game_stringify(output));
@@ -59,10 +75,10 @@ async function mystuff() {
                     body: output_str,
                 })
             } catch (error) {
-                game_log('reply error:' + error); // Handle errors
+                game_log('reply error:' + parent.game_stringify(error));
             }
         } catch (error) {
-            game_log('initial error:' + error); // Handle errors
+            game_log('initial error:' + parent.game_stringify(error));
         }
 
         debug("end of while");

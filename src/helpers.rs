@@ -7,14 +7,13 @@ use std::io;
 use std::thread;
 use std::time::Duration;
 
-const DBG: bool = false;
+const DEBUG: bool = false;
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
 pub enum State {
     Attacking,
     Banking,
     Fleeing,
-    Gathering,
     Rehoming,
     Startup,
     Targeting,
@@ -28,6 +27,7 @@ pub struct PartyData {
     all_chars: Vec<String>,
     next_area: usize,
     targets: Vec<String>,
+    state: State,
 }
 
 impl PartyData {
@@ -40,6 +40,7 @@ impl PartyData {
             all_chars: all_chars,
             next_area: 0,
             targets: vec![],
+            state: State::Startup,
         };
 
         new_self.write_to_file()?;
@@ -59,8 +60,16 @@ impl PartyData {
     }
 
     pub fn set_next_area(&mut self, next_area: usize) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("Changing area to {:#?}", next_area);
+        info_both(&format!("Changing area to {:#?}", next_area))?;
         self.next_area = next_area;
+
+        self.write_to_file()?;
+
+        Ok(())
+    }
+
+    pub fn set_state(&mut self, state: State) -> Result<(), Box<dyn std::error::Error>> {
+        self.state = state;
 
         self.write_to_file()?;
 
@@ -94,6 +103,10 @@ impl PartyData {
         Ok(())
     }
 
+    pub fn state(&self) -> State {
+        self.state.clone()
+    }
+
     pub fn all_chars(&self) -> &Vec<String> {
         &self.all_chars
     }
@@ -111,24 +124,32 @@ impl PartyData {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct PersonalData {
     // FIXME: Most things in here should get proper types some day
-    my_name: String,
-    state: State,
+    name: String,
+    last_seen_state: State,
     has_announced: bool,
-    waiting_for_sync: bool,
-    sync_count: usize,
+    has_completed: bool,
+    needs_to_bank: bool,
+    needs_to_flee: bool,
+    map: String,
+    x: f64,
+    y: f64,
 }
 
 impl PersonalData {
     pub fn new(my_name: String) -> Result<PersonalData, Box<dyn std::error::Error>> {
         let new_self = PersonalData {
-            my_name: my_name,
-            state: State::Startup,
+            name: my_name,
+            last_seen_state: State::Startup,
             has_announced: false,
-            waiting_for_sync: false,
-            sync_count: 0,
+            has_completed: false,
+            needs_to_bank: false,
+            needs_to_flee: false,
+            map: "main".to_owned(),
+            x: 0.0,
+            y: 0.0,
         };
 
         new_self.write_to_file()?;
@@ -137,29 +158,12 @@ impl PersonalData {
     }
 
     pub fn write_to_file(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let pdfname = personal_data_file_name(&self.my_name);
+        let pdfname = personal_data_file_name(&self.name);
         let pdfname_temp = format!("{}.temp", pdfname);
         fs::write(&pdfname_temp, serde_json::to_string(&self)?)?;
 
         // Make the update atomic
         fs::rename(pdfname_temp, &pdfname)?;
-
-        Ok(())
-    }
-
-    pub fn change_state(
-        &mut self,
-        party_data: &PartyData,
-        sync: bool,
-        new_state: State,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("Changing state to {:#?}", new_state);
-        self.state = new_state.clone();
-        self.has_announced = false;
-        self.waiting_for_sync = sync;
-        self.sync_count = 0;
-
-        self.write_to_file()?;
 
         Ok(())
     }
@@ -178,24 +182,76 @@ impl PersonalData {
         Ok(())
     }
 
-    pub fn state(&self) -> &State {
-        &self.state
+    pub fn check_state_change(&mut self, state: State) -> Result<(), Box<dyn std::error::Error>> {
+        if self.last_seen_state != state {
+            info_both(&format!(
+                "Moving from state {:#?} to state {:#?}",
+                self.last_seen_state, state,
+            ))?;
+            self.last_seen_state = state;
+            self.has_completed = false;
+            self.has_announced = false;
+        }
+
+        self.write_to_file()?;
+
+        Ok(())
     }
 
-    pub fn waiting_for_sync(&self) -> bool {
-        self.waiting_for_sync
+    pub fn name(&self) -> String {
+        self.name.clone()
     }
 
-    pub fn set_waiting_for_sync(&mut self, waiting_for_sync: bool) {
-        self.waiting_for_sync = waiting_for_sync;
+    pub fn has_completed(&self) -> bool {
+        self.has_completed
     }
 
-    pub fn sync_count(&self) -> usize {
-        self.sync_count
+    pub fn set_completed(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.has_completed = true;
+
+        self.write_to_file()?;
+
+        Ok(())
     }
 
-    pub fn set_sync_count(&mut self, sync_count: usize) {
-        self.sync_count = sync_count
+    pub fn needs_to_bank(&self) -> bool {
+        self.needs_to_bank
+    }
+
+    pub fn set_needs_to_bank(
+        &mut self,
+        needs_to_bank: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.needs_to_bank = needs_to_bank;
+
+        self.write_to_file()?;
+
+        Ok(())
+    }
+
+    pub fn needs_to_flee(&self) -> bool {
+        self.needs_to_flee
+    }
+
+    pub fn set_needs_to_flee(
+        &mut self,
+        needs_to_flee: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.needs_to_flee = needs_to_flee;
+
+        self.write_to_file()?;
+
+        Ok(())
+    }
+
+    pub fn set_location(&mut self, character: &Value) -> Result<(), Box<dyn std::error::Error>> {
+        self.map = character["map"].as_str().unwrap().to_string();
+        self.x = my_as_f64(&character["x"]);
+        self.y = my_as_f64(&character["y"]);
+
+        self.write_to_file()?;
+
+        Ok(())
     }
 }
 
@@ -273,7 +329,7 @@ pub fn info_local(string: &str) {
 }
 
 pub fn debug_local(string: &str) {
-    if DBG {
+    if DEBUG {
         eprintln!("{}", string);
     }
 }
@@ -297,7 +353,7 @@ pub fn get_id(v: &Value) -> &str {
 
 /*
 pub fn debug_both(string: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if DBG {
+    if DEBUG {
         eprintln!("{}", string);
         // set_message(Value::String("No monsters found.".to_string()), Value::Null)?;
         game_log(json!(string), Value::Null, Value::Null)?;
@@ -345,8 +401,8 @@ pub fn still_moving_to_location(
     character: &Value,
     coords: Value,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    if simple_distance(character, &coords)?.as_f64().unwrap() > 200.0 {
-        smart_move(coords, Value::Null)?;
+    if simple_distance(character, &coords)? > 200.0 {
+        half_move(&character, &coords)?;
         Ok(true)
     } else {
         Ok(false)
@@ -359,8 +415,8 @@ pub fn still_moving_to_npc(
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let coords = find_npc(json!(npcid))?;
 
-    if simple_distance(character, &coords)?.as_f64().unwrap() > 200.0 {
-        smart_move(coords, Value::Null)?;
+    if simple_distance(character, &coords)? > 200.0 {
+        half_move(&character, &coords)?;
         Ok(true)
     } else {
         Ok(false)
@@ -375,8 +431,10 @@ pub fn party_data_file_name() -> String {
     "/tmp/rustaland_party_data.json".to_owned()
 }
 
-pub fn everyones_states(party_data: &PartyData) -> Result<Vec<State>, Box<dyn std::error::Error>> {
-    let mut states: Vec<State> = vec![];
+pub fn everyones_personal_data(
+    party_data: &PartyData,
+) -> Result<Vec<PersonalData>, Box<dyn std::error::Error>> {
+    let mut datas: Vec<PersonalData> = vec![];
 
     for name in party_data.all_chars() {
         let fname = personal_data_file_name(name);
@@ -391,10 +449,10 @@ pub fn everyones_states(party_data: &PartyData) -> Result<Vec<State>, Box<dyn st
 
         let temp_data: PersonalData = serde_json::from_str(&data)?;
 
-        states.push(temp_data.state().clone());
+        datas.push(temp_data.clone());
     }
 
-    Ok(states)
+    Ok(datas)
 }
 
 pub fn my_as_f64(value: &Value) -> f64 {
@@ -403,7 +461,11 @@ pub fn my_as_f64(value: &Value) -> f64 {
     } else if value.is_i64() {
         return value.as_i64().unwrap() as f64;
     } else {
-        panic!("bad value {:#?}", value);
+        // This happens when an object isn't found or something
+        // FIXME: Can we re-arrange function calls to move "is this actually valid?" to somewhere
+        // that can make a better decision?  Or just make this a Result and catch it properly?
+        return 0.0;
+        // panic!("bad value {:#?}", value);
     }
 }
 
@@ -427,13 +489,21 @@ pub fn needs_healing(heal_amount: f64, character: &Value) -> bool {
 pub fn half_move(character: &Value, target: &Value) -> Result<(), Box<dyn std::error::Error>> {
     if character["map"].as_str().unwrap() != target["map"].as_str().unwrap() {
         // We somehow got badly out of position; use smart_move
+        let tname: String;
+        if target["name"].is_string() {
+            tname = target["name"].as_str().unwrap().to_owned();
+        } else {
+            tname = format!("{:#?}", target);
+        }
         info_both(&format!(
             "Target {} is on map {} but we're on map {}, using smart_move",
-            target["name"].as_str().unwrap(),
+            tname,
             target["map"].as_str().unwrap(),
             character["map"].as_str().unwrap()
         ))?;
-        smart_move(target.clone(), Value::Null)?;
+        debug_local("smart move due to other map");
+        smart_move(&target, Value::Null)?;
+        debug_local("after smart move due to other map");
     } else {
         if character["x"].is_number()
             && character["y"].is_number()
@@ -446,9 +516,28 @@ pub fn half_move(character: &Value, target: &Value) -> Result<(), Box<dyn std::e
             let t_x = my_as_f64(&target["x"]);
             let t_y = my_as_f64(&target["y"]);
 
-            almove(c_x + (t_x - c_x) / 2.0, c_y + (t_y - c_y) / 2.0)?;
+            let dist = simple_distance(character, target)?;
+            debug_local(&format!("dist: {:#?}", dist));
+            if simple_distance(character, target)? > 1000.0 {
+                // We're far enough away that the half way point is not likely to be useful
+                debug_local("smart move due to distance");
+                smart_move(&target, Value::Null)?;
+                debug_local("after smart move due to distance");
+            } else {
+                if can_move_to(c_x + (t_x - c_x) / 2.0, c_y + (t_y - c_y) / 2.0)?
+                    .as_bool()
+                    .unwrap()
+                {
+                    debug_local("move, close");
+                    almove(c_x + (t_x - c_x) / 2.0, c_y + (t_y - c_y) / 2.0)?;
+                } else {
+                    debug_local("smart_move, blocked");
+                    smart_move(&target, Value::Null)?;
+                    debug_local("after smart_move, blocked");
+                }
+            }
         } else {
-            eprintln!("Bad half_move: {:#?}, {:#?}", character, target);
+            debug_local(&format!("Bad half_move: {:#?}, {:#?}", character, target));
         }
     }
 
@@ -475,4 +564,49 @@ pub fn approach_and_use_skill(
         }
     }
     Ok(())
+}
+
+pub fn handle_sync(
+    party_data: &mut PartyData,
+    lead_char: bool,
+    personal_datas: &Vec<PersonalData>,
+    next_state: State,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if lead_char {
+        if personal_datas.iter().all(|x| x.has_completed()) {
+            info_both(&format!("Sync completed on {:#?}", party_data.state()))?;
+            party_data.set_state(next_state)?;
+        } else {
+            info_both(&format!("Waiting for sync on {:#?}", party_data.state()))?;
+            thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        info_both(&format!("Waiting for sync on {:#?}", party_data.state()))?;
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    Ok(())
+}
+
+pub fn get_coords_from_pds(
+    personal_datas: &Vec<PersonalData>,
+    name: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let mut value = Value::Null;
+
+    for pd in personal_datas {
+        if name == pd.name {
+            value = json!({"map":pd.map, "in":pd.map, "x":pd.x, "y":pd.y});
+        }
+    }
+
+    Ok(value)
+}
+
+pub fn get_coords_from_value(value: &Value) -> Result<Value, Box<dyn std::error::Error>> {
+    let map_name = value["map"].as_str().unwrap();
+    let ocx = my_as_f64(&value["x"]);
+    let ocy = my_as_f64(&value["y"]);
+
+    Ok(json!({"map":map_name, "in":map_name, "x":ocx, "y":ocy}))
 }

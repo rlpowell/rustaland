@@ -73,9 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut local_game_data = LocalGameData { in_party: false };
 
-    eprintln!("game_data done");
-    eprintln!("{:#?}", &party_data);
-    eprintln!("{:#?}", &personal_data);
+    debug_local("game_data done");
+    debug_local(&format!("{:#?}", &party_data));
+    debug_local(&format!("{:#?}", &personal_data));
 
     // // Clear any target from a previous run
     // change_target(&Value::Null)?;
@@ -169,7 +169,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Used in Rehoming
+    let mut last_x = 0.0;
+    let mut last_y = 0.0;
+
     loop {
+        debug_local("top of loop");
         // Read the party data; the lead_char writes and maintains this and therefore shouldn't
         // need to read it
         //
@@ -179,6 +184,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             party_data = serde_json::from_str(&data)?;
         }
+
+        // Deal with state change, if any
+        personal_data.check_state_change(party_data.state())?;
 
         // Get a bunch of data all at once to minimize fetch()es.  No idea why the outer parens are
         // necessary but they ar.
@@ -194,14 +202,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Split the data up
         let character = buncha_data[&my_name].clone();
         let get_party_data = buncha_data["party"].clone();
-        // eprintln!("gpd {:#?}", &get_party_data);
 
-        // TODO: Check that we have buncha_data for all characters
+        // Check for good data: we can't check for all the character data (at least in any simple
+        // way) because if the characters are too far apart, they won't be able to see each other.
+        if !character.is_object() || !get_party_data.is_object() {
+            eprintln!("Bad data, retrying: {:#?}", buncha_data);
+            thread::sleep(Duration::from_millis(500));
+            continue;
+        }
 
         if character["rip"] != json!(0) && character["rip"] != json!(false) {
             info_both("Character died; sleeping, kill the script when you see this.")?;
             thread::sleep(Duration::from_secs(99999999));
         }
+
+        // Store locations for other people to look at
+        personal_data.set_location(&character)?;
 
         // Stored from largest to smallest
         let mut hp_potions: Vec<(u64, u64, String)> = vec![];
@@ -304,23 +320,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // *** Conditions For Fleeing
         if character["hp"].as_f64().unwrap() < (character["max_hp"].as_f64().unwrap() * 0.50) {
-            eprintln!("fleeing 1");
-            personal_data.change_state(&party_data, false, State::Fleeing)?;
+            info_both("Asking to flee due to low HP")?;
+            personal_data.set_needs_to_flee(true)?;
         }
 
         if character["mp"].as_f64().unwrap() < (character["max_mp"].as_f64().unwrap() * 0.25) {
-            eprintln!("fleeing 2");
-            personal_data.change_state(&party_data, false, State::Fleeing)?;
+            info_both("Asking to flee due to low MP")?;
+            personal_data.set_needs_to_flee(true)?;
         }
 
         if total_hp_potions_count < 10 {
-            eprintln!("fleeing 3");
-            personal_data.change_state(&party_data, false, State::Fleeing)?;
+            info_both("Asking to flee due to low HP potion count")?;
+            personal_data.set_needs_to_flee(true)?;
         }
 
         if total_mp_potions_count < 10 {
-            eprintln!("fleeing 4");
-            personal_data.change_state(&party_data, false, State::Fleeing)?;
+            info_both("Asking to flee due to low MP potion count")?;
+            personal_data.set_needs_to_flee(true)?;
         }
 
         // Do we need to bank items?
@@ -336,150 +352,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .len()
             > 35
         {
-            eprintln!("banking 1");
-            personal_data.change_state(&party_data, false, State::Banking)?;
+            info_both("Asking to bank due to excess items.")?;
+            personal_data.set_needs_to_bank(true)?;
+        }
+        // **** lead_char manages the shared state
+        let personal_datas = everyones_personal_data(&party_data)?;
+
+        if lead_char {
+            // Set shared state to banking if anyony is banking
+            if personal_datas.iter().any(|x| x.needs_to_bank()) {
+                info_both("Someone wants to bank so we're banking.")?;
+                party_data.set_state(State::Banking)?;
+            }
+
+            // Set shared state to fleeing if anyony is fleeing
+            if personal_datas.iter().any(|x| x.needs_to_flee()) {
+                info_both("Someone wants to flee so we're fleeing.")?;
+                party_data.set_state(State::Fleeing)?;
+            }
         }
 
         // Check that the party is still together
-        for name in party_data.all_chars() {
-            // TODO: fill this in
-        }
-
-        // **** Rectify states
-
-        // Check if anyone is fleeing or banking
-        let states = everyones_states(&party_data)?;
-
-        if states.iter().any(|x| x == &State::Banking) {
-            eprintln!("anyone_banking");
-            personal_data.change_state(&party_data, false, State::Banking)?;
-        }
-
-        if states.iter().any(|x| x == &State::Fleeing) {
-            eprintln!("anyone_fleeing");
-            personal_data.change_state(&party_data, false, State::Fleeing)?;
-        }
-
         if lead_char {
-            // The lead_char doesn't need to rectify its own state except in the fleeing and
-            // banking cases above I don't think?
+            let mut someone_too_far = false;
+            for name in party_data.all_chars().iter().filter(|x| x != &&my_name) {
+                if simple_distance(&character, &get_coords_from_pds(&personal_datas, name)?)?
+                    > 200.0
+                {
+                    someone_too_far = true;
+                }
+            }
+
+            if someone_too_far {
+                info_both(
+                    "Other party members are too far away, waiting for them. TODO: do something if this lasts too long",
+                )?;
+                thread::sleep(Duration::from_millis(1000));
+                continue;
+            }
         } else {
-            let data = fs::read_to_string(personal_data_file_name(party_data.lead_char()))
-                .expect("expect 4");
-
-            let lead_char_data: PersonalData = serde_json::from_str(&data)?;
-
-            match &personal_data.state() {
-                State::Startup | State::Fleeing | State::Banking | State::Gathering => {
-                    // Keep going until you're done
-                }
-                State::Attacking | State::Rehoming | State::Targeting => {
-                    // Match the lead character as needed
-                    if personal_data.state() != lead_char_data.state() {
-                        personal_data.change_state(
-                            &party_data,
-                            true,
-                            lead_char_data.state().clone(),
-                        )?;
-                    }
-                }
+            let coords = &get_coords_from_pds(&personal_datas, &party_data.lead_char())?;
+            if simple_distance(&character, coords)? > 200.0 {
+                info_both("Heading for the lead character.")?;
+                half_move(&character, coords)?;
             }
         }
 
         loot(Value::Null)?;
 
-        // Handle state sync
-        if personal_data.waiting_for_sync() {
-            if personal_data.sync_count() > 10 {
-                eprintln!("Too many sync attempts, gathering.");
-                personal_data.change_state(&party_data, false, State::Gathering)?;
-            } else {
-                let states = everyones_states(&party_data)?;
+        debug_local(&format!(
+            "About to hit the match: {:#?}, {:#?}",
+            &party_data.state(),
+            personal_data.has_completed()
+        ));
 
-                if states.iter().all(|x| x == personal_data.state()) {
-                    personal_data.set_waiting_for_sync(false);
-                    personal_data.set_sync_count(0);
+        match &party_data.state() {
+            State::Banking => {
+                if personal_data.has_completed() {
+                    personal_data.set_needs_to_bank(false)?;
+                    thread::sleep(Duration::from_millis(1000));
+                    handle_sync(&mut party_data, lead_char, &personal_datas, State::Rehoming)?;
                 } else {
-                    eprintln!("Waiting for sync on {:#?}", personal_data.state());
-                    thread::sleep(Duration::from_millis(100));
-                }
+                    // TODO: use home skill
+                    personal_data.announce_as_needed("Banking.")?;
 
-                personal_data.set_sync_count(personal_data.sync_count() + 1);
-            }
-        }
+                    if still_moving_to_npc(&character, "items0")? {
+                        continue;
+                    }
 
-        // eprintln!("About to hit the match: {:#?}", &personal_data.state());
-
-        match &personal_data.state() {
-            State::Gathering => {
-                eprint!("gpd: {:#?}", get_party_data);
-                thread::sleep(Duration::from_millis(100));
-                if lead_char {
-                    eprintln!("Waiting for others to gather.");
-                    let mut someone_too_far = false;
-                    for name in party_data.all_chars().iter().filter(|x| x != &&my_name) {
-                        let map_name = get_party_data[name]["map"].as_str().unwrap();
-                        let ocx = my_as_f64(&get_party_data[name]["x"]);
-                        let ocy = my_as_f64(&get_party_data[name]["y"]);
-
-                        if simple_distance(
-                            &character,
-                            &json!({"map":map_name, "in":map_name, "x":ocx, "y":ocy}),
-                        )?
-                        .as_f64()
-                        .unwrap()
-                            > 200.0
-                        {
-                            someone_too_far = true;
+                    for (index, item) in character["items"].as_array().unwrap().iter().enumerate() {
+                        if index > 13 && !item.is_null() {
+                            info_both(&format!(
+                                "Storing {} in the bank.",
+                                g_items[item["name"].as_str().unwrap()]["name"]
+                            ))?;
+                            bank_store(json!(index), Value::Null, Value::Null)?;
                         }
                     }
 
-                    if !someone_too_far {
-                        personal_data.change_state(&party_data, true, State::Rehoming)?;
+                    info_both("Done banking, restarting monster search from the top.")?;
+
+                    if lead_char {
+                        party_data.set_next_area(0)?;
                     }
-                } else {
-                    let map_name = get_party_data[&party_data.lead_char()]["map"]
-                        .as_str()
-                        .unwrap();
-                    let lcx = my_as_f64(&get_party_data[&party_data.lead_char()]["x"]);
-                    let lcy = my_as_f64(&get_party_data[&party_data.lead_char()]["y"]);
-                    if still_moving_to_location(
-                        &character,
-                        json!({"map":map_name, "in":map_name, "x":lcx, "y":lcy}),
-                    )? {
-                        continue;
-                    } else {
-                        personal_data.change_state(&party_data, true, State::Rehoming)?;
-                    }
+
+                    check_if_bailing(total_hp_potions_count)?;
+
+                    personal_data.set_completed()?;
+                    personal_data.set_needs_to_bank(false)?;
                 }
-            }
-            State::Banking => {
-                // TODO: use home skill
-                personal_data.announce_as_needed("Banking.")?;
-
-                if still_moving_to_npc(&character, "items0")? {
-                    continue;
-                }
-
-                for (index, item) in character["items"].as_array().unwrap().iter().enumerate() {
-                    if index > 13 && !item.is_null() {
-                        info_both(&format!(
-                            "Storing {} in the bank.",
-                            g_items[item["name"].as_str().unwrap()]["name"]
-                        ))?;
-                        bank_store(json!(index), Value::Null, Value::Null)?;
-                    }
-                }
-
-                info_both("Done banking, restarting monster search from the top.")?;
-
-                if lead_char {
-                    party_data.set_next_area(0)?;
-                }
-
-                check_if_bailing(total_hp_potions_count)?;
-
-                personal_data.change_state(&party_data, true, State::Rehoming)?;
             }
             State::Targeting => {
                 if lead_char {
@@ -525,7 +486,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         if target.is_null() {
                             info_both("No matching monsters found.")?;
-                            personal_data.change_state(&party_data, true, State::Rehoming)?;
+                            party_data.set_state(State::Rehoming)?;
                         } else if target.is_object() {
                             personal_data.announce_as_needed(&format!(
                                 "Changing to new target {}",
@@ -537,7 +498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             party_data
                                 .set_targets(vec![target["id"].as_str().unwrap().to_owned()])?;
 
-                            personal_data.change_state(&party_data, true, State::Attacking)?;
+                            party_data.set_state(State::Attacking)?;
                         } else {
                             panic!("target is neither null nor object??");
                         }
@@ -548,13 +509,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         personal_data
                             .announce_as_needed(&format!("Current target is {}", target["name"]))?;
 
-                        personal_data.change_state(&party_data, true, State::Attacking)?;
+                        party_data.set_state(State::Attacking)?;
                     } else {
                         panic!("target is neither null nor object??");
                     }
                 } else {
-                    eprintln!("Waiting on lead char for targetting");
-                    thread::sleep(Duration::from_millis(100));
+                    info_both("Waiting on lead char for targetting")?;
+                    thread::sleep(Duration::from_millis(500));
                 }
             }
             State::Attacking => {
@@ -570,10 +531,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if target.is_null() {
                     if lead_char {
-                        personal_data.change_state(&party_data, true, State::Targeting)?;
+                        party_data.set_state(State::Targeting)?;
                         continue;
                     } else {
-                        eprintln!("Waiting on lead char for new target");
+                        info_both("Waiting on lead character for new target")?;
                         thread::sleep(Duration::from_millis(100));
                     }
                 } else {
@@ -633,50 +594,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             State::Fleeing => {
-                // TODO: use town skill
+                if personal_data.has_completed() {
+                    personal_data.set_needs_to_flee(false)?;
+                    thread::sleep(Duration::from_millis(1000));
+                    handle_sync(&mut party_data, lead_char, &personal_datas, State::Rehoming)?;
+                } else {
+                    // TODO: use town skill
 
-                personal_data.announce_as_needed("Fleeing.")?;
+                    personal_data.announce_as_needed("Fleeing.")?;
 
-                // Stun everybody so it's easier to get away
-                let target = get_nearest_monster(json!(Value::Null))?;
+                    // Stun everybody so it's easier to get away
+                    let target = get_nearest_monster(json!(Value::Null))?;
 
-                if character["ctype"].as_str().unwrap() == "warrior" {
-                    if !is_on_cooldown("stomp")?.as_bool().unwrap_or(true) {
-                        info_both("Using Stomp skill.")?;
-                        use_skill("stomp", &target, Value::Null)?;
+                    if character["ctype"].as_str().unwrap() == "warrior" {
+                        if !is_on_cooldown("stomp")?.as_bool().unwrap_or(true) {
+                            info_both("Using Stomp skill.")?;
+                            use_skill("stomp", &target, Value::Null)?;
+                        }
                     }
+
+                    if still_moving_to_npc(&character, "fancypots")? {
+                        continue;
+                    }
+
+                    info_both("Done fleeing, continuing monster search.")?;
+
+                    check_if_bailing(total_hp_potions_count)?;
+
+                    personal_data.set_completed()?;
+                    personal_data.set_needs_to_flee(false)?;
                 }
-
-                if still_moving_to_npc(&character, "fancypots")? {
-                    continue;
-                }
-
-                info_both("Done fleeing, continuing monster search.")?;
-
-                check_if_bailing(total_hp_potions_count)?;
-
-                personal_data.change_state(&party_data, true, State::Rehoming)?;
             }
             State::Rehoming => {
-                let next_area = party_data.next_area().clone();
-
-                personal_data
-                    .announce_as_needed(&format!("Rehoming to {}.", areas[next_area].0))?;
-
-                if still_moving_to_location(&character, areas[next_area].1.clone())? {
-                    continue;
-                }
-
-                info_both(&format!("Done rehoming to {}.", areas[next_area].0))?;
-
                 if lead_char {
-                    party_data.set_next_area((next_area + 1) % areas.len())?;
-                }
+                    let next_area = party_data.next_area().clone();
 
-                personal_data.change_state(&party_data, true, State::Targeting)?;
+                    personal_data
+                        .announce_as_needed(&format!("Rehoming to {}.", areas[next_area].0))?;
+
+                    // Check to see if smart_move got stuck
+                    if last_x == my_as_f64(&character["x"]) && last_y == my_as_f64(&character["y"])
+                    {
+                        info_both(&format!(
+                            "Got stuck rehoming to {}, moving to next area",
+                            areas[next_area].0
+                        ))?;
+                    } else {
+                        if still_moving_to_location(&character, areas[next_area].1.clone())? {
+                            last_x = my_as_f64(&character["x"]);
+                            last_y = my_as_f64(&character["y"]);
+                            continue;
+                        }
+
+                        info_both(&format!("Done rehoming to {}.", areas[next_area].0))?;
+                    }
+
+                    party_data.set_next_area((next_area + 1) % areas.len())?;
+
+                    party_data.set_state(State::Targeting)?;
+                }
             }
             State::Startup => {
-                personal_data.change_state(&party_data, true, State::Rehoming)?;
+                if lead_char {
+                    party_data.set_state(State::Rehoming)?;
+                }
             }
         };
     }
